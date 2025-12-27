@@ -1,4 +1,4 @@
-name: Build Kernel M14x
+name: Build M14x Kernel
 on:
   workflow_dispatch:
 
@@ -6,29 +6,35 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Build Essentials
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang llvm lld
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang llvm lld libncurses-dev
 
-      - name: Setup Toolchain
+      - name: Setup Clang Toolchain
         run: |
-          # Samsung M14 usually requires a specific Clang/GCC version
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 toolchain
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
+          echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
       - name: Build Kernel
         run: |
           export ARCH=arm64
-          export CROSS_COMPILE=$(pwd)/toolchain/bin/aarch64-linux-android-
-          make m146b_defconfig # Replace with your actual defconfig name
-          make -j$(nproc)
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # Using the exact config you found
+          make O=out s5e8535-m14xnsxx_defconfig
+          make -j$(nproc) O=out
         
-      - name: Upload Kernel Image
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Image
-          path: arch/arm64/boot/Image.gz-dtb
+          name: M14x-Permissive-Kernel
+          path: out/arch/arm64/boot/Image.gz-dtb
           
