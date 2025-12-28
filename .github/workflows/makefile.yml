@@ -13,35 +13,47 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang llvm lld libncurses-dev \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev python3 python-is-python3
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3 python-is-python3
 
       - name: Setup Clang Toolchain
         run: |
-          # Clang r416183b is highly recommended for Samsung Android 13/14 sources
+          # Clang r416183b is standard for Samsung Android 13/14
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
       - name: Build Kernel
         run: |
-          # Define environment variables
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export PATH="$(pwd)/clang/bin:$PATH"
-          
-          # These tell the Makefile to use Clang while utilizing the GNU tools for headers/linking
-          export CC=clang
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          
+          # Create output directory
           mkdir -p out
           
-          # 1. Configuration step
-          make O=out s5e8535-m14xnsxx_defconfig
+          # Use all available cores
+          JOBS=$(nproc --all)
           
-          # 2. Compilation step (Reduced -j to 4 for stability on GitHub runners)
-          make -j4 O=out \
+          # 1. Configuration step
+          make -j$JOBS O=out \
+              ARCH=arm64 \
               CC=clang \
+              LD=ld.lld \
+              AR=llvm-ar \
+              NM=llvm-nm \
+              OBJCOPY=llvm-objcopy \
+              OBJDUMP=llvm-objdump \
+              STRIP=llvm-strip \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+              CLANG_TRIPLE=aarch64-linux-gnu- \
+              s5e8535-m14xnsxx_defconfig
+
+          # 2. Compilation step
+          make -j$JOBS O=out \
+              ARCH=arm64 \
+              CC=clang \
+              LD=ld.lld \
+              AR=llvm-ar \
+              NM=llvm-nm \
+              OBJCOPY=llvm-objcopy \
+              OBJDUMP=llvm-objdump \
+              STRIP=llvm-strip \
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               CLANG_TRIPLE=aarch64-linux-gnu-
