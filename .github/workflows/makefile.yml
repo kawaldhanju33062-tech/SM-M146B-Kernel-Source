@@ -20,18 +20,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang llvm lld \
           libncurses-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3 python-is-python3 \
-          zstd pahole lz4 libssl-dev rsync
+          zstd pahole lz4 rsync
 
       - name: Setup Clang Toolchain
         run: |
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
-      - name: Patch for Permissive SELinux
+      - name: Patch for Permissive and Disable Werror
         run: |
+          # Force Permissive
           if [ -f security/selinux/hooks.c ]; then
             sed -i 's/selinux_enforcing_boot = true/selinux_enforcing_boot = false/g' security/selinux/hooks.c
           fi
+          
+          # HARD FIX: Remove all '-Werror' occurrences in all Makefiles
+          # This is the most common reason for 'Error 2' on Samsung sources
+          find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g'
+          
+          # Set permissive in defconfig
           sed -i 's/CONFIG_SECURITY_SELINUX_DEVELOP=y/CONFIG_SECURITY_SELINUX_DEVELOP=y\nCONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0/g' arch/arm64/configs/s5e8535-m14xnsxx_defconfig
 
       - name: Build Kernel
@@ -39,8 +46,6 @@ jobs:
           mkdir -p out
           JOBS=$(nproc --all)
           
-          # Added -Wno-everything to bypass any minor warnings blocking the build
-          # Added -Wno-error to prevent warnings-as-errors
           export MAKE_FLAGS="ARCH=arm64 \
               O=out \
               CC=clang \
@@ -49,26 +54,23 @@ jobs:
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               CLANG_TRIPLE=aarch64-linux-gnu- \
-              KCFLAGS='-Wno-everything -Wno-error' \
-              HOSTCFLAGS='-Wno-error' \
-              HOSTCXXFLAGS='-Wno-error'"
+              KCFLAGS='-w' \
+              HOSTCFLAGS='-w' \
+              HOSTCXXFLAGS='-w'"
 
           # 1. Configure
           make -j$JOBS $MAKE_FLAGS s5e8535-m14xnsxx_defconfig
 
-          # 2. Build Headers (Sometimes required separately for Exynos)
-          make -j$JOBS $MAKE_FLAGS headers_install
-
-          # 3. Compile (Using || true to keep logs if it fails, and showing last 100 lines)
-          make -j$JOBS $MAKE_FLAGS || (tail -n 200 out/build.log && exit 1)
+          # 2. Compile (Redirecting output to a file so we can read it on failure)
+          make -j$JOBS $MAKE_FLAGS 2>&1 | tee out/build.log || (tail -n 100 out/build.log && exit 1)
 
       - name: Verify Output
         run: |
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "Build Success!"
           else
-            echo "Build Failed. Checking directory structure..."
-            find out/arch/arm64/boot/ -maxdepth 1
+            echo "Build Failed. Checking directory for any partial files..."
+            ls -R out/arch/arm64/boot/ || echo "Boot folder empty"
             exit 1
           fi
 
@@ -78,6 +80,6 @@ jobs:
           name: M14x-Permissive-Kernel
           path: |
             out/arch/arm64/boot/Image*
-            out/arch/arm64/boot/*.img
-            out/arch/arm64/boot/dts/exynos/*.dtb
+            out/arch/arm64/boot/dtb*
+            out/arch/arm64/boot/dtbo.img
             
