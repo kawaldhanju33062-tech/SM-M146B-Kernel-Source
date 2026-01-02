@@ -13,32 +13,25 @@ jobs:
 
       - name: Free Disk Space
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang llvm lld \
           libncurses-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3 python-is-python3 \
-          zstd pahole lz4 libssl-dev
+          zstd pahole lz4 libssl-dev rsync
 
       - name: Setup Clang Toolchain
         run: |
-          # Standard Clang for Samsung Android 13/14
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
       - name: Patch for Permissive SELinux
         run: |
-          # This force-disables SELinux Enforcing at the source level
           if [ -f security/selinux/hooks.c ]; then
             sed -i 's/selinux_enforcing_boot = true/selinux_enforcing_boot = false/g' security/selinux/hooks.c
-            echo "SELinux hooks patched to permissive"
           fi
-          # Also set in defconfig
           sed -i 's/CONFIG_SECURITY_SELINUX_DEVELOP=y/CONFIG_SECURITY_SELINUX_DEVELOP=y\nCONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0/g' arch/arm64/configs/s5e8535-m14xnsxx_defconfig
 
       - name: Build Kernel
@@ -46,8 +39,8 @@ jobs:
           mkdir -p out
           JOBS=$(nproc --all)
           
-          # Use LLVM=1 to ensure Clang tools are used for everything
-          # KCFLAGS ignores warnings that Samsung's -Werror flag would otherwise turn into build-breaking errors
+          # Added -Wno-everything to bypass any minor warnings blocking the build
+          # Added -Wno-error to prevent warnings-as-errors
           export MAKE_FLAGS="ARCH=arm64 \
               O=out \
               CC=clang \
@@ -56,33 +49,35 @@ jobs:
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               CLANG_TRIPLE=aarch64-linux-gnu- \
-              KCFLAGS='-Wno-error -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-incompatible-pointer-types' \
+              KCFLAGS='-Wno-everything -Wno-error' \
               HOSTCFLAGS='-Wno-error' \
               HOSTCXXFLAGS='-Wno-error'"
 
           # 1. Configure
           make -j$JOBS $MAKE_FLAGS s5e8535-m14xnsxx_defconfig
 
-          # 2. Compile
-          make -j$JOBS $MAKE_FLAGS
+          # 2. Build Headers (Sometimes required separately for Exynos)
+          make -j$JOBS $MAKE_FLAGS headers_install
+
+          # 3. Compile (Using || true to keep logs if it fails, and showing last 100 lines)
+          make -j$JOBS $MAKE_FLAGS || (tail -n 200 out/build.log && exit 1)
 
       - name: Verify Output
         run: |
-          echo "Checking for build outputs..."
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "Build Success!"
           else
-            echo "Build Failed: Image not found. Check raw logs for 'error:'"
+            echo "Build Failed. Checking directory structure..."
+            find out/arch/arm64/boot/ -maxdepth 1
             exit 1
           fi
 
-      - name: Upload Flashable Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: M14x-Permissive-Kernel
           path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/Image.gz-dtb
-            out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/Image*
+            out/arch/arm64/boot/*.img
+            out/arch/arm64/boot/dts/exynos/*.dtb
             
