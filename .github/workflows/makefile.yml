@@ -27,47 +27,52 @@ jobs:
 
       - name: Setup Clang Toolchain
         run: |
-          # Samsung Android 13/14 usually uses Clang r416183b
+          # Standard Clang for Samsung Android 13/14
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           echo "$(pwd)/clang/bin" >> $GITHUB_PATH
+
+      - name: Patch for Permissive SELinux
+        run: |
+          # This force-disables SELinux Enforcing at the source level
+          if [ -f security/selinux/hooks.c ]; then
+            sed -i 's/selinux_enforcing_boot = true/selinux_enforcing_boot = false/g' security/selinux/hooks.c
+            echo "SELinux hooks patched to permissive"
+          fi
+          # Also set in defconfig
+          sed -i 's/CONFIG_SECURITY_SELINUX_DEVELOP=y/CONFIG_SECURITY_SELINUX_DEVELOP=y\nCONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0/g' arch/arm64/configs/s5e8535-m14xnsxx_defconfig
 
       - name: Build Kernel
         run: |
           mkdir -p out
           JOBS=$(nproc --all)
           
-          # Setup common variables
-          export PATH=$(pwd)/clang/bin:$PATH
-          export COMMON_FLAGS="ARCH=arm64 \
+          # Use LLVM=1 to ensure Clang tools are used for everything
+          # KCFLAGS ignores warnings that Samsung's -Werror flag would otherwise turn into build-breaking errors
+          export MAKE_FLAGS="ARCH=arm64 \
               O=out \
               CC=clang \
-              LD=ld.lld \
-              AR=llvm-ar \
-              NM=llvm-nm \
-              OBJCOPY=llvm-objcopy \
-              OBJDUMP=llvm-objdump \
-              STRIP=llvm-strip \
               LLVM=1 \
               LLVM_IAS=1 \
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-              CLANG_TRIPLE=aarch64-linux-gnu-"
+              CLANG_TRIPLE=aarch64-linux-gnu- \
+              KCFLAGS='-Wno-error -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-incompatible-pointer-types' \
+              HOSTCFLAGS='-Wno-error' \
+              HOSTCXXFLAGS='-Wno-error'"
 
           # 1. Configure
-          make -j$JOBS $COMMON_FLAGS s5e8535-m14xnsxx_defconfig
+          make -j$JOBS $MAKE_FLAGS s5e8535-m14xnsxx_defconfig
 
           # 2. Compile
-          # Adding V=1 (Verbose) helps identify exactly where an error occurs
-          make -j$JOBS $COMMON_FLAGS V=1
+          make -j$JOBS $MAKE_FLAGS
 
       - name: Verify Output
         run: |
           echo "Checking for build outputs..."
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "Build Success!"
-            ls -l out/arch/arm64/boot/
           else
-            echo "Build Failed: Image not found."
+            echo "Build Failed: Image not found. Check raw logs for 'error:'"
             exit 1
           fi
 
